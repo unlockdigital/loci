@@ -480,6 +480,7 @@ export default function EmbedObjectApp() {
   const embedModelUrl = embedModelSrc
     ? buildModelRequestUrl(embedModelSrc, {
         gated: modelLoadPolicy.gated,
+        constrained: modelLoadPolicy.constrained,
         highRisk: modelLoadPolicy.highRisk,
         deliveryCapabilities: manifest?.modelDelivery,
       })

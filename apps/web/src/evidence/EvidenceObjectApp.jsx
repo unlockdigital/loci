@@ -2832,6 +2832,7 @@ export default function EvidenceObjectApp() {
   const requestedModelCanvasUrl = modelUrl
     ? buildModelRequestUrl(modelUrl, {
         gated: modelLoadPolicy.gated,
+        constrained: modelLoadPolicy.constrained,
         highRisk: modelLoadPolicy.highRisk,
         deliveryCapabilities: page.model?.delivery_capabilities,
       })

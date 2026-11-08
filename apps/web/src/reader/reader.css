@@ -204,3 +204,14 @@
 .reader-surface .studio-object-surface[data-deferred=true] .model-canvas-loading-text p{font-size:14px;line-height:1.45;max-width:28ch;text-wrap:pretty}
 .reader-surface .studio-object-surface[data-deferred=true] .model-canvas-load-action{align-self:flex-start;margin:0;min-height:44px;padding:8px 14px}
 }
+
+/* Loading and deliberate mobile entry use the current reader blue palette. */
+.reader-surface{--reader-load-bg:#e8f0ff;--reader-load-ink:#142234;--reader-load-muted:#435a76}
+.reader-surface[data-studio-theme="darkroom"]{--reader-load-bg:#1c2d49;--reader-load-ink:#f0f4fa;--reader-load-muted:#bdcada}
+.reader-surface .studio-object-surface[data-deferred=true],
+.reader-surface .studio-object-surface[data-deferred=true] .model-canvas-loading-overlay{background:var(--reader-load-bg)!important;border-color:#a9bfe9}
+.reader-surface .studio-object-surface[data-deferred=true] .model-canvas-loading-text{color:var(--reader-load-ink)}
+.reader-surface .studio-object-surface[data-deferred=true] .model-canvas-loading-text p{color:var(--reader-load-muted)}
+.reader-surface .studio-object-surface[data-deferred=true] button.model-canvas-load-action{background:#1f5bff;color:#fff;border:1px solid #1f5bff;box-shadow:none;min-height:44px;padding:9px 16px;border-radius:24px}
+.reader-surface .studio-object-surface[data-deferred=true] button.model-canvas-load-action:hover{background:#1747cc;border-color:#1747cc}
+.reader-surface .studio-object-surface[data-deferred=true] button.model-canvas-load-action:focus-visible{background:#1f5bff;outline:3px solid #769aff;outline-offset:3px;box-shadow:none}

@@ -127,9 +127,11 @@ test('real desktop Mac (Macintosh + maxTouchPoints 0) is NOT iOS and auto-loads'
 })
 
 // ---- deviceMemory ----
-test('deviceMemory <= 4 gates (low-memory)', () => {
+test('low memory selects constrained quality while desktop auto-loads', () => {
   const result = policy({ nav: { deviceMemory: LOW_DEVICE_MEMORY_GB } })
   assert.equal(result.device.lowMemory, true)
+  assert.equal(result.autoLoad, true)
+  assert.equal(result.constrained, true)
   assert.ok(result.reasons.includes('low-device-memory'))
 })
 
@@ -142,9 +144,11 @@ test('deviceMemory 2 gates; deviceMemory 8 does not; absent does not', () => {
 })
 
 // ---- saveData / prefers-reduced-data ----
-test('Data Saver (connection.saveData) gates', () => {
+test('Data Saver selects constrained quality without gating desktop', () => {
   const result = policy({ nav: { deviceMemory: 8, connection: { saveData: true } } })
   assert.equal(result.device.saveData, true)
+  assert.equal(result.autoLoad, true)
+  assert.equal(result.constrained, true)
   assert.ok(result.reasons.includes('save-data'))
 })
 
@@ -156,6 +160,8 @@ test('webkitConnection.saveData gates (vendor-prefixed)', () => {
 test('prefers-reduced-data media query gates when no connection API', () => {
   const result = policy({ win: { trueQueries: [REDUCED_DATA] }, nav: { deviceMemory: 8 } })
   assert.equal(result.device.saveData, true)
+  assert.equal(result.autoLoad, true)
+  assert.equal(result.constrained, true)
   assert.ok(result.reasons.includes('save-data'))
 })
 
@@ -232,10 +238,10 @@ test('multiple signals accumulate reasons (iPhone narrow + touch + low memory + 
 
 test('result shape is stable', () => {
   const result = policy({ nav: { deviceMemory: 8 } })
-  assert.deepEqual(Object.keys(result).sort(), ['autoLoad', 'device', 'gated', 'highRisk', 'reasons'])
+  assert.deepEqual(Object.keys(result).sort(), ['autoLoad', 'constrained', 'device', 'gated', 'highRisk', 'reasons'])
   assert.deepEqual(
     Object.keys(result.device).sort(),
-    ['constrainedIframe', 'ios', 'lowMemory', 'narrowViewport', 'saveData', 'touchPrimary'],
+    ['constrainedIframe', 'desktopPointer', 'ios', 'lowMemory', 'mobileClient', 'narrowViewport', 'saveData', 'slowConnection', 'touchPrimary'],
   )
   assert.ok(Array.isArray(result.reasons))
 })
@@ -331,5 +337,26 @@ test('useModelLoadPolicy: narrow window -> gated with reason', () => {
 
 test('useModelLoadPolicy: returns a well-formed policy object', () => {
   const result = renderHook('synthetic-vessel', makeWindow({ trueQueries: [] }))
-  assert.deepEqual(Object.keys(result).sort(), ['autoLoad', 'device', 'gated', 'highRisk', 'reasons'])
+  assert.deepEqual(Object.keys(result).sort(), ['autoLoad', 'constrained', 'device', 'gated', 'highRisk', 'reasons'])
+})
+
+for (const memory of [2,4,8]) {
+ test(`fine-pointer narrow desktop with ${memory} GB auto-loads`,()=>{
+  const result=policy({win:{trueQueries:[NARROW,'(hover: hover) and (pointer: fine)']},nav:{deviceMemory:memory}})
+  assert.equal(result.gated,false);assert.equal(result.autoLoad,true);assert.equal(result.constrained,memory<=4)
+ })
+}
+for (const connection of [{effectiveType:'3g'},{downlink:1.2},{rtt:800},{saveData:true}]) {
+ test(`desktop uses smaller tier for ${JSON.stringify(connection)}`,()=>{
+  const result=policy({win:{trueQueries:['(hover: hover) and (pointer: fine)']},nav:{deviceMemory:8,connection}})
+  assert.equal(result.gated,false);assert.equal(result.constrained,true)
+ })
+}
+test('Android phone with an attached fine pointer retains mobile loading',()=>{
+ const result=policy({win:{trueQueries:['(hover: hover) and (pointer: fine)']},nav:{userAgent:'Mozilla/5.0 Android Mobile',deviceMemory:8}})
+ assert.equal(result.gated,true);assert.equal(result.constrained,true)
+})
+test('unknown connection and ordinary desktop select standard quality',()=>{
+ const result=policy({nav:{deviceMemory:8,connection:{downlink:0,rtt:0}}})
+ assert.equal(result.autoLoad,true);assert.equal(result.constrained,false)
 })

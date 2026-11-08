@@ -123,3 +123,11 @@ test('global token allowlists stay fixed and path-free', () => {
     assert.match(token, /^(?:mobile|web)-\d+$/)
   }
 })
+
+test('automatic desktop loads independently select an exact constrained tier',()=>{
+ const policy={gated:false,constrained:true,optimizedDeliveryEnabled:true,deliveryCapabilities:DELIVERY}
+ assert.equal(selectModelVariant(policy),'mobile-4096')
+ const url=new URL(buildModelRequestUrl(CANONICAL,policy),'http://localhost')
+ assert.equal(url.searchParams.get('variant'),'mobile-4096');assert.equal(url.searchParams.get('variant_required'),'1')
+ assert.equal(buildModelRequestUrl(CANONICAL,{gated:false,constrained:true,optimizedDeliveryEnabled:true}),CANONICAL)
+})
