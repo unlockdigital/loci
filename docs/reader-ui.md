@@ -4,7 +4,7 @@ Search results group object identity, timestamp, transcript excerpt and the evid
 
 Evidence pairs the object with its recording and places the selected passage beneath both media. Phone layouts retain deliberate model loading; short landscape keeps simultaneous comparison with a full passage reader. Desktop viewer height follows the recording and its controls. Enlargement preserves the mounted Canvas through modal entry, exit and rotation.
 
-An explicit annotation, clip or transcript selection captures a passage snapshot. Playback and transport seeking preserve that snapshot. Passage citations use complete overlapping transcript lines, their recording identity and ordered public timeline participant/date associations. Attribution remains qualified as session-timeline information. Related interpretations remain individually selectable.
+An explicit annotation, clip or transcript selection captures a passage snapshot. Playback and transport seeking preserve that snapshot and its spatial annotation. Scrubbing cancels guided playback boundaries while the current-time clip highlight follows the recording. Passage citations use complete overlapping transcript lines, their recording identity and ordered public timeline participant/date associations. Attribution remains qualified as session-timeline information. Related interpretations remain individually selectable.
 
 Copy passage, Copy citation and Copy passage link have separate payloads. Passage links restore the selected start time; the existing playback-link action uses the current playhead. Links preserve the established URL contract and restore a start location rather than encoding a complete selected range. Clipboard failure provides a selectable manual-copy field.
 
