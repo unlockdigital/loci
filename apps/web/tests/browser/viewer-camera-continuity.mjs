@@ -75,22 +75,22 @@ try {
     const singleCompletionPose = await page.evaluate(() => window.cameraContinuityViews.at(-1))
     assert.ok(poseDistance(manualPose, singleCompletionPose) < .005,
       `single-window completion preserves the camera (${reducedMotion}): ${poseDistance(manualPose, singleCompletionPose)}`)
-    // A later seek to a distinct timestamp remains a manual scrub and clears focus.
+    // A manual scrub cancels guided playback while the explicit research pin
+    // and its spatial annotation remain stable until replacement or Unpin.
+    const completedPassage = await page.locator('.reader-inline-passage').innerText()
     await page.locator('video.evidence-video-element').evaluate(node => { node.currentTime = 6.5 })
     await page.waitForFunction(() => {
       const media = document.querySelector('video.evidence-video-element')
       return media && !media.seeking && Math.abs(media.currentTime - 6.5) < .1
     })
-    await page.waitForFunction(() =>
-      document.querySelector('.model-canvas-shell button[aria-current="true"]') === null)
-    assert.notEqual(await singlePin.getAttribute('aria-current'), 'true',
-      'manual scrub clears the selected pin after guided completion')
-    assert.equal(await page.evaluate(() =>
-      document.querySelector('.studio-clip-sequence button[aria-pressed="true"]') === null), true,
-    'manual scrub clears the active clip after guided completion')
+    assert.equal(await singlePin.getAttribute('aria-current'), 'true',
+      'manual scrub retains the explicitly selected spatial annotation')
+    assert.equal(await singleClip.getAttribute('aria-pressed'), 'true',
+      'the clip containing the scrubbed timestamp stays highlighted')
+    assert.equal(await page.locator('.reader-inline-passage').innerText(), completedPassage,
+      'manual scrub preserves the complete pinned passage and citation scope')
 
-    // Manual scrubbing resets camera intent, so establish a fresh user pose for
-    // the separate two-window continuity check.
+    // Establish a fresh user pose for the separate two-window continuity check.
     const poseAfterManualScrub = await page.evaluate(() => window.cameraContinuityViews.at(-1))
     const postScrubBox = await stage.locator('canvas').boundingBox()
     assert.ok(postScrubBox)
@@ -178,17 +178,22 @@ try {
       const media = document.querySelector('video.evidence-video-element')
       return media && !media.paused && media.currentTime >= 4.5 && media.currentTime < 5.8
     }, null, { timeout: 5000 })
+    const guidedPassage = await page.locator('.reader-inline-passage').innerText()
     await page.locator('video.evidence-video-element').evaluate(node => { node.currentTime = 6.5 })
     await page.waitForFunction(() => {
       const media = document.querySelector('video.evidence-video-element')
       return media && !media.seeking && Math.abs(media.currentTime - 6.5) < .1
-        && document.querySelector('.model-canvas-shell button[aria-current="true"]') === null
-        && document.querySelector('.studio-clip-sequence button[aria-pressed="true"]') === null
     })
+    assert.equal(await guidedSinglePin.getAttribute('aria-current'), 'true',
+      'scrubbing during guided playback retains the selected spatial annotation')
+    assert.equal(await page.locator('.reader-inline-passage').innerText(), guidedPassage,
+      'scrubbing during playback preserves the pinned passage and citation scope')
     await page.waitForFunction(() => {
       const media = document.querySelector('video.evidence-video-element')
       return media && !media.paused && media.currentTime >= 8.2 && media.currentTime < 9.5
     }, null, { timeout: 5000 })
+    assert.equal(await page.locator('.reader-inline-passage').innerText(), guidedPassage,
+      'free playback beyond the former guided stop preserves the pin')
     await page.goto(`${origin}/evidence/objects/demo-cube?annotation=demo-annotation-3`, { waitUntil: 'domcontentloaded' })
     const restoredPin = page.locator('.model-canvas-shell').getByRole('button', { name: 'Compare two sections', exact: true })
     await restoredPin.waitFor()
@@ -199,8 +204,8 @@ try {
     report.cases.push({ reducedMotion, dragChange: poseDistance(initialPose, manualPose),
       singleStopSeconds,
       singleCompletionPoseChange: poseDistance(manualPose, singleCompletionPose),
-      manualScrubClearedPin: true, guidedRangeSwitchInput: 'keyboard',
-      guidedScrubClearedFocusAndContinued: true,
+      manualScrubPreservedPin: true, guidedRangeSwitchInput: 'keyboard',
+      guidedScrubPreservedPinAndContinued: true,
       sequenceTimes, largestDirectSelectionChange,
       railChange: poseDistance(sequenceManualPose, railPose), restoredAnnotation: true })
     await context.close()

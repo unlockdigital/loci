@@ -2,6 +2,7 @@
 node_modules/
 dist/
 dist-ci/
+apps/web/dist-*/
 .vite/
 __pycache__/
 *.py[cod]

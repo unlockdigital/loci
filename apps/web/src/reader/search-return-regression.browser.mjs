@@ -1,0 +1,53 @@
+import { startReaderFixture, routeReaderDevelopmentApi } from './readerFixtureServer.mjs'
+import assert from 'node:assert/strict'
+import { chromium } from 'playwright'
+import { resolve } from 'node:path'
+const fixture = process.env.READER_TEST_ORIGIN ? null : await startReaderFixture()
+const readerOrigin = process.env.READER_TEST_ORIGIN || fixture.origin
+const artifactRoot = process.env.READER_TEST_ARTIFACTS || resolve('test-results/approved-reader')
+const { mkdirSync } = await import('node:fs')
+mkdirSync(artifactRoot, { recursive: true })
+const browser=await chromium.launch({headless:true})
+const page=await browser.newPage({viewport:{width:1280,height:800},reducedMotion:'reduce'})
+const apiRedirects = await routeReaderDevelopmentApi(page, readerOrigin)
+const requests=[]
+try {
+ await page.route('**/api/v1/public/projects',r=>r.fulfill({json:[{id:'synthetic-project',name:'Synthetic Collection'}]}))
+ await page.route('**/api/v1/public/stats',r=>r.fulfill({json:{open_now_count:0,in_preparation_count:0}}))
+ await page.route('**/api/v1/public/objects/page*',r=>r.fulfill({json:{items:[],page:1,total:0,total_pages:0,page_size:3}}))
+ await page.route('**/api/v1/public/search/segments',r=>{
+  const body=r.request().postDataJSON(); requests.push(body)
+  return r.fulfill({json:{results:Array.from({length:5},(_,i)=>({segment_id:`synthetic-${i}`,video_id:'synthetic-video-a',object_name:'Synthetic Vessel',video_title:'Generated recording filename',project_name:'Synthetic Collection',start_ms:2000,end_ms:4000,text:`Synthetic matched passage ${i+1}`,lexical_match:true,semantic_score:.8,scene_description:'Generated visual description',evidence_url:'/evidence/objects/synthetic-object?studio=1&t=2000',thumbnail_url:'/fixtures/synthetic-poster.png'})),page:body.page,total_results:15,total_pages:3,page_size:5}})
+ })
+ await page.goto(`${readerOrigin}/public?q=synthetic&project_id=synthetic-project&search_page=2`)
+ await page.locator('.public-library-search-row').first().waitFor()
+ assert.equal(requests.at(-1).page,2)
+ assert.equal(requests.at(-1).project_id,'synthetic-project')
+ const initialCard=await page.locator('.public-library-search-row').first().boundingBox()
+ assert.ok(initialCard.height<=230,'Collapsed desktop results must remain compact enough to compare moments')
+ const initialAction=await page.getByRole('button',{name:'Open evidence at 00:02',exact:true}).first().boundingBox()
+ assert.ok(initialAction.y+initialAction.height<=800,'First desktop result action must appear in the initial viewport')
+ assert.equal(await page.getByText('Generated visual description',{exact:true}).first().isVisible(),false)
+ await page.locator('.reader-match-details summary').first().click()
+ assert.equal(await page.getByText('Generated visual description',{exact:true}).first().isVisible(),true)
+ await page.screenshot({path:resolve(artifactRoot,'search-desktop.png'),fullPage:true})
+ await page.evaluate(()=>scrollTo(0,350))
+ const scroll=await page.evaluate(()=>scrollY)
+ await page.getByRole('button',{name:'Open evidence at 00:02',exact:true}).first().click()
+ await page.locator('.reader-selection:visible').first().waitFor()
+ await page.getByRole('link',{name:/Collection$/,exact:false}).click()
+ await page.locator('.public-library-search-row').first().waitFor()
+ assert.ok(page.url().includes('search_page=2'))
+ assert.equal(requests.at(-1).page,2)
+ assert.equal(requests.at(-1).query,'synthetic')
+ await page.waitForFunction(y=>Math.abs(scrollY-y)<3,scroll)
+ await page.setViewportSize({width:390,height:844})
+ await page.goto(`${readerOrigin}/public?q=synthetic&project_id=synthetic-project&search_page=2`)
+ await page.locator('.public-library-search-row').first().waitFor()
+ const mobileAction=await page.getByRole('button',{name:'Open evidence at 00:02',exact:true}).first().boundingBox()
+ assert.ok(mobileAction.y+mobileAction.height<=844,'First phone result action must appear beside its quotation in the initial viewport')
+ await page.screenshot({path:resolve(artifactRoot,'search-mobile.png'),fullPage:true})
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1))
+ console.log('PASS: nonempty search hierarchy, disclosed scene details, API query/filter/page, evidence navigation, return page and scroll, mobile reflow')
+if(process.env.READER_EXPECT_DEV_API==='1')assert.ok(apiRedirects.some(request=>request.url.includes('/evidence/objects/')),'default development API evidence is covered during the Search return journey')
+} finally {await browser.close(); await fixture?.close()}

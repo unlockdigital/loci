@@ -1,3 +1,5 @@
+import { buildPassageSelection, retainPassageSelection } from '../reader/passage'
+import { publishedTranscriptVtt } from '../reader/captions'
 import { guidedWindowBoundary } from '../lib/guidedWindowBoundary'
 import { semanticFitTier } from '../lib/searchPresentation'
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -22,7 +24,7 @@ import {
 } from '../lib/evidenceMediaLoading'
 import { shouldAutoScrollOnLoad } from '../lib/evidenceScroll'
 import { resolveHydratedAnnotationId } from '../lib/evidenceSelection'
-import { PUBLIC_BROWSE_PATH, navigateToPublicBrowse, readWindowLocation } from '../lib/navigation'
+import { PUBLIC_BROWSE_PATH, navigateToPublicBrowse, navigateToUrl, readWindowLocation } from '../lib/navigation'
 import {
   normalizeQueryValue,
   normalizeFiniteNumber,
@@ -981,7 +983,12 @@ export default function EvidenceObjectApp() {
   const [compactContextView, setCompactContextView] = useState('model')
   const [shouldMountModelCanvas, setShouldMountModelCanvas] = useState(false)
   const [mobileModelLoadRequested, setMobileModelLoadRequested] = useState(false)
+  const readerSelectionRevision = useRef(0)
+  const [readerSelectionSnapshot, setReaderSelectionSnapshot] = useState(null)
+  const admittedModelRef = useRef('')
+  const readerModelRequestRef = useRef(null)
   const [page, setPage] = useState(null)
+  const [publishedCaptionTrack, setPublishedCaptionTrack] = useState(null)
   const [loading, setLoading] = useState(!route.errorState)
   const [errorState, setErrorState] = useState(route.errorState)
   const [currentMs, setCurrentMs] = useState(0)
@@ -1081,6 +1088,19 @@ export default function EvidenceObjectApp() {
   // Data Saver / constrained-iframe / iOS keep the explicit "Load 3D model"
   // gate. Replaces the prior viewport-width-only gate.
   const modelLoadPolicy = useModelLoadPolicy(page?.object?.id || '')
+  useEffect(() => {
+    const videoId = page?.playback?.video_id
+    const transcript = page?.transcript
+    const vtt = videoId && transcript?.video_id === videoId
+      ? publishedTranscriptVtt(transcript.segments) : ''
+    if (!vtt) {
+      setPublishedCaptionTrack(null)
+      return undefined
+    }
+    const url = URL.createObjectURL(new Blob([vtt], { type: 'text/vtt' }))
+    setPublishedCaptionTrack({ videoId, url })
+    return () => URL.revokeObjectURL(url)
+  }, [page?.playback?.video_id, page?.transcript])
 
   // A new object resets the explicit load request so a freshly navigated
   // gated/high-risk object does not auto-mount off the previous tap.
@@ -1212,11 +1232,15 @@ export default function EvidenceObjectApp() {
     }
 
     if (!page?.model?.model_url) {
+      admittedModelRef.current = ''
       setShouldMountModelCanvas(false)
       return undefined
     }
 
+    if (studioEnabled && admittedModelRef.current === page.model.model_url) return undefined
+
     if (modelLoadPolicy.gated) {
+      if (mobileModelLoadRequested) admittedModelRef.current = page.model.model_url
       setShouldMountModelCanvas(mobileModelLoadRequested)
       return undefined
     }
@@ -1232,6 +1256,7 @@ export default function EvidenceObjectApp() {
       if (cancelled) {
         return
       }
+      admittedModelRef.current = page.model.model_url
       setShouldMountModelCanvas(true)
     }
 
@@ -1691,6 +1716,63 @@ export default function EvidenceObjectApp() {
     page?.playback?.video_id,
     route.websiteObjectId,
   ])
+  const makeReaderSelection = useCallback((intent) => {
+    if (!page?.object) return null
+    const selection = buildPassageSelection({
+      segments: page.transcript?.segments || [],
+      timeline: page.citation_attribution_timeline || page.citationAttributionTimeline || [],
+      videoId: page.playback?.video_id || page.focus?.video_id,
+      ...intent,
+      buildUrl: (focus) => buildCanonicalEvidenceMomentUrl({
+        canonicalUrl: objectCanonicalUrl, websiteObjectId: route.websiteObjectId, ...focus,
+      }),
+    })
+    if (!selection) return null
+    const selectionKey = `${page.object.id}:${++readerSelectionRevision.current}`
+    return {
+      ...selection, objectId: page.object.id,
+      relatedChoices: (annotationMap.get(selection.annotationId)?.related_clip_ids || []).map(id => {
+        const clip = clipMap.get(id)
+        if (!clip) return null
+        const passage = buildPassageSelection({ segments: page.transcript?.segments || [],
+          timeline: page.citation_attribution_timeline || page.citationAttributionTimeline || [],
+          videoId: selection.videoId, startMs: clip.start_ms, endMs: clip.end_ms, buildUrl: () => '',
+        })
+        return { id, key: id === selection.clipId ? selectionKey : id, title: clip.title || selection.title, startMs: passage?.startMs ?? clip.start_ms,
+          endMs: passage?.endMs ?? clip.end_ms, participantPairs: passage?.participantPairs || [] }
+      }).filter(Boolean),
+      key: selectionKey,
+      citation: `${buildPlainTextEvidenceCitation({
+        objectTitle: citationObjectTitle, momentTitle: selection.title,
+        collectionName: citationCollectionName, focusType: 'Published transcript passage',
+        timeLabel: formatFocusWindow({ start_ms: selection.startMs, end_ms: selection.endMs }),
+        excerpt: selection.text, canonicalUrl: selection.url, accessDate: citationAccessDate,
+      })} ${selection.attribution}.`,
+    }
+  }, [page, objectCanonicalUrl, route.websiteObjectId, citationObjectTitle, citationCollectionName, citationAccessDate, annotationMap, clipMap])
+
+  const pinReaderPassage = useCallback((intent) => {
+    setReaderSelectionSnapshot(makeReaderSelection(intent))
+  }, [makeReaderSelection])
+
+  useEffect(() => {
+    if (!page?.object) return
+    if (!routeHasFocusedMoment && !handoff?.annotationId) {
+      setReaderSelectionSnapshot(previous => retainPassageSelection(previous, page.object.id))
+      return
+    }
+    const annotation = (handoff?.annotationId || route.params.annotation || route.params.clip)
+      ? annotationMap.get(handoff?.annotationId || page.focus?.annotation_id || page.selected_annotation?.id) : null
+    const clip = route.params.clip ? clipMap.get(route.params.clip)
+      : (annotation?.related_clip_ids || []).map(id => clipMap.get(id)).find(Boolean)
+    const focus = clip || annotation || page.focus || {}
+    pinReaderPassage({
+      startMs: focus.start_ms ?? page.playback?.seek_ms ?? 0, endMs: focus.end_ms,
+      annotationId: annotation?.id, clipId: clip?.id,
+      title: annotation?.title || clip?.title || 'Transcript passage',
+    })
+  }, [page, pinReaderPassage, annotationMap, clipMap, handoff?.annotationId, routeHasFocusedMoment, route.params.clip, route.params.annotation])
+
   // P4.6 — the focus used ONLY for SPEAKER attribution. It follows the live
   // playback clock so the resolved speaker tracks whoever is speaking at the
   // current moment — during free playback AND within a selected clip. The
@@ -2071,6 +2153,10 @@ export default function EvidenceObjectApp() {
   // payload — it only drives the existing video clock.
   function seekStudioMoment(target) {
     const seekMs = Math.max(0, Math.floor(Number(target?.seekMs) || 0))
+    if (target?.source === 'transcript') {
+      const line = page?.transcript?.segments?.find(row => Number(row.start_ms) === seekMs)
+      if (line) pinReaderPassage({ startMs: line.start_ms, endMs: line.end_ms, exactLine: line, title: 'Transcript passage' })
+    }
     // A transcript selection always seeks the spoken line. Retain any spatial
     // annotation focus separately from its guided clip playback, whose start
     // can precede this line. Citation timing follows the shared video clock.
@@ -2084,7 +2170,7 @@ export default function EvidenceObjectApp() {
     disarmMomentPlayback()
     setTranscriptAutoFollow(true)
     setSelectedSearchResultId('')
-    selectAnnotationWithCamera(moment?.annotationId || '')
+    selectAnnotationWithCamera(moment?.annotationId || selectedAnnotationId || '')
     setActiveClipId('')
     setMomentSource('video')
     setCurrentMs(seekMs)
@@ -2241,6 +2327,7 @@ export default function EvidenceObjectApp() {
     }
 
     const nextClip = (annotation.related_clip_ids || []).map((clipId) => clipMap.get(clipId)).find(Boolean) || null
+    pinReaderPassage({ startMs: nextClip?.start_ms ?? annotation.start_ms, endMs: nextClip?.end_ms ?? annotation.end_ms, annotationId: annotation.id, clipId: nextClip?.id, title: annotation.title })
     setTranscriptAutoFollow(true)
     setSelectedSearchResultId('')
     selectAnnotationWithCamera(annotation.id, preserveCamera)
@@ -2250,7 +2337,7 @@ export default function EvidenceObjectApp() {
     // multi-clip auto-advances then stops) — Studio only.
     armMomentPlayback(buildMomentPlaybackClips(annotation, clipMap), 0)
     focusVideoMoment(nextClip?.start_ms ?? annotation.start_ms, true)
-  }, [annotationMap, armMomentPlayback, clipMap, focusVideoMoment, selectAnnotationWithCamera])
+  }, [annotationMap, armMomentPlayback, clipMap, focusVideoMoment, selectAnnotationWithCamera, pinReaderPassage])
 
   // Studio P3 — rail dispatch. A moment routes through the existing annotation
   // selection (sets selectedAnnotationId so the model focus follows); an auto
@@ -2266,6 +2353,7 @@ export default function EvidenceObjectApp() {
     }
     if (item.kind === 'clip' && item.clipId) {
       const clip = clipMap.get(item.clipId)
+      pinReaderPassage({ startMs: clip?.start_ms ?? item.startMs, endMs: clip?.end_ms ?? item.endMs, clipId: item.clipId, title: clip?.title || item.title })
       setTranscriptAutoFollow(true)
       setSelectedSearchResultId('')
       selectAnnotationWithCamera('')
@@ -2279,7 +2367,7 @@ export default function EvidenceObjectApp() {
       armMomentPlayback(endMs !== null && endMs > startMs ? [{ id: item.clipId, startMs, endMs }] : [], 0)
       focusVideoMoment(startMs, true)
     }
-  }, [armMomentPlayback, clipMap, focusVideoMoment, handleAnnotationSelection, selectAnnotationWithCamera])
+  }, [armMomentPlayback, clipMap, focusVideoMoment, handleAnnotationSelection, selectAnnotationWithCamera, pinReaderPassage])
 
   const handleCanvasAnnotationSelect = useCallback((annotation) => {
     if (!annotation?.id) {
@@ -2304,6 +2392,7 @@ export default function EvidenceObjectApp() {
     selectAnnotationWithCamera('')
     setActiveClipId('')
     setMomentSource('video')
+    pinReaderPassage({ startMs: result.start_ms ?? result.context_start_ms, endMs: result.end_ms ?? result.context_end_ms, title: 'Search result passage' })
     setSelectedSearchResultId(result.segment_id || '')
     focusVideoMoment(seekMs, false)
     // Keep the focused media/stage visible after a Jump (the search panel sits
@@ -2319,7 +2408,7 @@ export default function EvidenceObjectApp() {
         }
       })
     }
-  }, [disarmMomentPlayback, focusVideoMoment, selectAnnotationWithCamera])
+  }, [disarmMomentPlayback, focusVideoMoment, selectAnnotationWithCamera, pinReaderPassage])
 
   // Studio P4 — search "Open": a cross-collection result navigates to its public
   // evidence deep link. Same-origin /evidence/objects/ guard (defense in depth;
@@ -2332,7 +2421,7 @@ export default function EvidenceObjectApp() {
     window.location.assign(url)
   }, [])
 
-  function handleSequenceSelection(clipId) {
+  function handleSequenceSelection(clipId, annotation = selectedAnnotation) {
     const clip = clipMap.get(clipId)
     if (!clip) {
       return
@@ -2340,11 +2429,12 @@ export default function EvidenceObjectApp() {
 
     setTranscriptAutoFollow(true)
     setSelectedSearchResultId('')
+    pinReaderPassage({ startMs: clip.start_ms, endMs: clip.end_ms, clipId: clip.id, annotationId: annotation?.id, title: annotation?.title || clip.title })
     setActiveClipId(clip.id)
     setMomentSource('clip')
     // Continue the selected moment's sequence from the chosen clip, then stop
     // after the final clip.
-    const sequence = buildMomentPlaybackClips(selectedAnnotation, clipMap)
+    const sequence = buildMomentPlaybackClips(annotation, clipMap)
     const startIndex = sequence.findIndex((entry) => entry.id === clip.id)
     if (startIndex >= 0) {
       armMomentPlayback(sequence, startIndex)
@@ -2430,6 +2520,11 @@ export default function EvidenceObjectApp() {
   }
 
   function openPublicBrowse() {
+    const origin = window.history.state?.readerOrigin
+    if (origin?.url && /^\/public(?:\?|$)/.test(origin.url)) {
+      navigateToUrl(origin.url, { state: { readerScrollY: origin.scrollY } })
+      return
+    }
     navigateToPublicBrowse()
   }
 
@@ -2462,6 +2557,7 @@ export default function EvidenceObjectApp() {
     selectAnnotationWithCamera('')
     setActiveClipId('')
     setMomentSource('video')
+    pinReaderPassage({ startMs: result.start_ms, endMs: result.end_ms, title: 'Search result passage' })
     setSelectedSearchResultId(result.segment_id)
     setEvidenceSearchExpanded(false)
     focusVideoMoment(result.start_ms, false)
@@ -2733,13 +2829,17 @@ export default function EvidenceObjectApp() {
   // tiers also carry an exact-representation flag, so an unavailable active tier
   // reaches the recoverable viewer state instead of loading the large canonical
   // model. Ordinary objects preserve the established canonical fallback.
-  const modelCanvasUrl = modelUrl
+  const requestedModelCanvasUrl = modelUrl
     ? buildModelRequestUrl(modelUrl, {
         gated: modelLoadPolicy.gated,
         highRisk: modelLoadPolicy.highRisk,
         deliveryCapabilities: page.model?.delivery_capabilities,
       })
     : modelUrl
+  if (!readerModelRequestRef.current || readerModelRequestRef.current.base !== modelUrl || !shouldMountModelCanvas) {
+    readerModelRequestRef.current = { base: modelUrl, url: requestedModelCanvasUrl }
+  }
+  const modelCanvasUrl = studioEnabled ? readerModelRequestRef.current.url : requestedModelCanvasUrl
   const modelCanvasDpr = isMobileEvidenceLayout ? 1 : EVIDENCE_MODEL_CANVAS_DPR
   // Gated (mobile / low-memory / Data Saver / constrained / iOS) and not yet
   // explicitly requested -> show the Load 3D model affordance.
@@ -2778,7 +2878,7 @@ export default function EvidenceObjectApp() {
       className="evidence-video-element"
       key={playbackKey}
       ref={videoRef}
-      controls
+      controls={!studioEnabled}
       playsInline
       preload={videoPreload}
       poster={videoPosterUrl || undefined}
@@ -2846,7 +2946,7 @@ export default function EvidenceObjectApp() {
           setCurrentMs(nextMs)
           setTranscriptAutoFollow(true)
           setSelectedSearchResultId('')
-          selectAnnotationWithCamera('')
+          if (!studioEnabled) selectAnnotationWithCamera('')
           setActiveClipId('')
           setMomentSource('video')
           return
@@ -2874,7 +2974,11 @@ export default function EvidenceObjectApp() {
       onError={() => {
         setVideoLoadError('Published video playback could not be loaded right now.')
       }}
-    />
+    >
+      {publishedCaptionTrack?.videoId === page.playback?.video_id ? (
+        <track kind="captions" label="Published transcript" src={publishedCaptionTrack.url} />
+      ) : null}
+    </video>
   ) : null
 
   const videoCard = (
@@ -2951,6 +3055,7 @@ export default function EvidenceObjectApp() {
                 aria-current={isActive ? 'true' : undefined}
                 onKeyDown={(event) => handleTranscriptRowKeyDown(index, event)}
                 onClick={() => {
+                  pinReaderPassage({ startMs: segment.start_ms, endMs: segment.end_ms, exactLine: segment, title: 'Transcript passage' })
                   setTranscriptAutoFollow(true)
                   setSelectedSearchResultId('')
                   selectAnnotationWithCamera('')
@@ -3436,6 +3541,16 @@ export default function EvidenceObjectApp() {
   ) : null
 
   if (studioEnabled) {
+    const stableSelection = retainPassageSelection(readerSelectionSnapshot, page.object.id)
+    const relatedChoices = stableSelection?.relatedChoices || []
+    const readerSelection = stableSelection
+    const selectRelatedPassage = (choiceId) => {
+      const choice = relatedChoices.find(item => item.id === choiceId || item.key === choiceId)
+      if (!choice) return
+      const annotation = annotationMap.get(readerSelection?.annotationId) || null
+      selectAnnotationWithCamera(annotation?.id || '')
+      handleSequenceSelection(choice.id, annotation)
+    }
     return (
       <>
         <a
@@ -3446,6 +3561,25 @@ export default function EvidenceObjectApp() {
           Skip to content
         </a>
         <StudioShell
+          key={page.object.id}
+          videoRef={videoRef}
+          modelDeferred={modelCanvasDeferredForMobile}
+          videoError={videoLoadError}
+          playbackAttribution={`${citationAttribution.detailSpeakerLabel} · ${citationAttribution.detailRecordedLabel}`}
+          readerSelection={readerSelection}
+          relatedChoices={relatedChoices}
+          readerSelectionRevision={readerSelection?.key || ''}
+          onSelectRelatedChoice={selectRelatedPassage}
+          onSelectRelatedPassage={selectRelatedPassage}
+          onUnpinPassage={() => setReaderSelectionSnapshot(null)}
+          onReplayPassage={() => {
+            if (!readerSelection) return
+            if (readerSelection.videoId !== page.playback?.video_id) {
+              navigateToUrl(readerSelection.url)
+              return
+            }
+            seekStudioMoment({ seekMs: readerSelection.startMs, source: 'transport' })
+          }}
           mainContentId={EVIDENCE_MAIN_CONTENT_ID}
           autoScrollOnLoad={autoScrollOnLoad}
           objectTitle={page.object.title}
@@ -3460,7 +3594,7 @@ export default function EvidenceObjectApp() {
                 <svg className="studio-cite-icon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false">
                   <path d="M7 7h4v4H8.5c0 1.7.6 2.6 2 3l-.6 1.6C7.5 15.9 6.5 14.2 6.5 11.6V7H7zm7 0h4v4h-2.5c0 1.7.6 2.6 2 3l-.6 1.6c-2.4-.7-3.4-2.4-3.4-5V7z" fill="currentColor" />
                 </svg>
-                Cite this moment
+                Cite playback
               </span>
               <div className="studio-cite-actions">
                 <button
