@@ -59,7 +59,12 @@ try {
     const node = document.querySelector('video.evidence-video-element')
     return node && !node.seeking && Math.abs(node.currentTime - 8) <= 0.35
   })
-  await page.getByRole('button', { name: 'Copy link', exact: true }).click()
+  // Playback sharing retains the selected clip and annotation context. The
+  // reader's passage copy actions have a separate payload and live elsewhere.
+  const playbackContext = page.locator('details.reader-playback-context')
+  await playbackContext.locator('summary').click()
+  const playbackShare = playbackContext.getByRole('region', { name: 'Cite or share this moment', exact: true })
+  await playbackShare.getByRole('button', { name: 'Copy link', exact: true }).click()
   await page.getByText('Link copied.', { exact: true }).waitFor()
   const share = await page.evaluate(() => navigator.clipboard.readText())
   const url = new URL(share)
@@ -76,7 +81,9 @@ try {
   assert.equal(await secondClip.getAttribute('aria-pressed'), 'true', 'share reload restores the linked purple clip')
   report.clipTransition = { from: 'demo-clip-1', to: 'demo-clip-3', playbackTimes }
   report.restoredTimeMs = await video.evaluate(node => node.currentTime * 1000)
-  await page.getByRole('button', { name: 'Copy citation', exact: true }).first().click()
+  // Reload collapses the disclosure; open it through the public control again.
+  await playbackContext.locator('summary').click()
+  await playbackShare.getByRole('button', { name: 'Copy citation', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Copy citation' })
   await dialog.waitFor()
   assert.match(await dialog.locator('textarea').inputValue(), /Demo cube/)
