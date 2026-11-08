@@ -1,11 +1,11 @@
 /* Adaptive 3D model load policy — one source of truth for evidence + embed.
  *
- * Desktop/laptop auto-loads the GLB; mobile, low-memory, Data Saver, and
- * constrained-iframe contexts keep the explicit "Load 3D model" gate. This
- * preserves the iOS low-memory regression guard (mobile makes zero initial
- * model requests; the canonical model loads only after an explicit tap) while
- * fixing the prior viewport-width-only gate that let low-memory / Data Saver /
- * iPad-landscape / iOS-on-wide-viewport contexts auto-load a large model.
+ * Desktop/laptop automatically loads an appropriate approved representation.
+ * Mobile and touch-primary contexts retain the explicit "Load 3D model" gate.
+ * Memory and connection signals choose delivery quality independently of gating. This
+ * Mobile keeps zero initial model requests. Desktop uses the reported memory
+ * and connection to choose a smaller approved tier while loading automatically.
+ * Fine-pointer desktop windows retain this behavior at narrow widths.
  *
  * All detectors are pure and take an injectable `env` ({ window, navigator }) so
  * they are unit-testable and SSR-safe. A React hook (`useModelLoadPolicy`) wraps
@@ -24,6 +24,7 @@ export const LOW_DEVICE_MEMORY_GB = 4
 
 const NARROW_VIEWPORT_QUERY = `(max-width: ${MOBILE_MAX_WIDTH}px)`
 const TOUCH_PRIMARY_QUERY = '(hover: none) and (pointer: coarse)'
+const DESKTOP_POINTER_QUERY = '(hover: hover) and (pointer: fine)'
 const REDUCED_DATA_QUERY = '(prefers-reduced-data: reduce)'
 
 function getWindow(env) {
@@ -70,6 +71,25 @@ export function isNarrowViewport(env, maxWidth = MOBILE_MAX_WIDTH) {
 // auto-load.
 export function isTouchPrimary(env) {
   return matchMedia(env, TOUCH_PRIMARY_QUERY)
+}
+
+export function isDesktopPointer(env) {
+  return matchMedia(env, DESKTOP_POINTER_QUERY)
+}
+
+export function isMobileClient(env) {
+  const nav = getNavigator(env)
+  return Boolean(nav?.userAgentData?.mobile || /Android|iPhone|iPad|iPod|Mobile/i.test(nav?.userAgent || ''))
+}
+
+export function hasSlowConnection(env) {
+  const nav = getNavigator(env)
+  const connection = nav && (nav.connection || nav.mozConnection || nav.webkitConnection)
+  return Boolean(connection && (
+    ['slow-2g', '2g', '3g'].includes(connection.effectiveType)
+    || (connection.downlink > 0 && connection.downlink < 2)
+    || connection.rtt >= 600
+  ))
 }
 
 // iOS / iPadOS (incl. iPadOS 13+ that masquerades as Macintosh). All iOS
@@ -135,7 +155,7 @@ export function isHighRiskObject(objectId, highRiskObjectIds = HIGH_RISK_OBJECT_
 /**
  * The single load decision used by evidence + embed.
  * @returns {{
- *   autoLoad: boolean, gated: boolean, highRisk: boolean, reasons: string[],
+ *   autoLoad: boolean, gated: boolean, constrained: boolean, highRisk: boolean, reasons: string[],
  *   device: object
  * }}
  */
@@ -147,20 +167,28 @@ export function evaluateModelLoadPolicy({ objectId = '', env, highRiskObjectIds 
     lowMemory: isLowMemoryDevice(env),
     saveData: prefersReducedData(env),
     constrainedIframe: isConstrainedIframe(env),
+    desktopPointer: isDesktopPointer(env),
+    mobileClient: isMobileClient(env),
+    slowConnection: hasSlowConnection(env),
   }
+  const desktop = device.desktopPointer && !device.mobileClient && !device.ios
+  const gated = device.mobileClient || device.ios || device.touchPrimary
+    || (!desktop && (device.narrowViewport || device.constrainedIframe))
 
   const reasons = []
-  if (device.narrowViewport) reasons.push('narrow-viewport')
+  if (device.narrowViewport && !desktop) reasons.push('narrow-viewport')
   if (device.touchPrimary) reasons.push('touch-primary')
   if (device.ios) reasons.push('ios')
   if (device.lowMemory) reasons.push('low-device-memory')
   if (device.saveData) reasons.push('save-data')
   if (device.constrainedIframe) reasons.push('constrained-iframe')
 
-  const gated = reasons.length > 0
+  if (device.mobileClient) reasons.push('mobile-client')
+  if (device.slowConnection) reasons.push('slow-connection')
   return {
     autoLoad: !gated,
     gated,
+    constrained: gated || device.lowMemory || device.saveData || device.slowConnection,
     // High-risk treatment (stronger warning) applies on iOS for the flagged
     // objects; it never auto-loads regardless.
     highRisk: gated && device.ios && isHighRiskObject(objectId, highRiskObjectIds),
@@ -183,7 +211,7 @@ export function useModelLoadPolicy(objectId = '') {
       return undefined
     }
 
-    const queries = [NARROW_VIEWPORT_QUERY, TOUCH_PRIMARY_QUERY, REDUCED_DATA_QUERY]
+    const queries = [NARROW_VIEWPORT_QUERY, TOUCH_PRIMARY_QUERY, DESKTOP_POINTER_QUERY, REDUCED_DATA_QUERY]
       .map((query) => {
         try {
           return window.matchMedia(query)
@@ -205,7 +233,9 @@ export function useModelLoadPolicy(objectId = '') {
       return () => mql.removeListener(reevaluate)
     })
 
-    return () => cleanups.forEach((cleanup) => cleanup())
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection
+    connection?.addEventListener?.('change', reevaluate)
+    return () => { cleanups.forEach((cleanup) => cleanup()); connection?.removeEventListener?.('change', reevaluate) }
   }, [objectId])
 
   return policy

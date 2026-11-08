@@ -15,6 +15,22 @@ const apiRedirects = await routeReaderDevelopmentApi(page, readerOrigin)
 const url=`${readerOrigin}/evidence/objects/synthetic-object?studio=1&annotation=synthetic-annotation-01`
 const geometry=[]
 try {
+// Low-resource desktops load automatically; actual phones retain explicit entry.
+for(const testCase of [
+ {name:'desktop-low-memory',width:1280,height:800,memory:4,touch:false,auto:true},
+ {name:'narrow-desktop',width:660,height:800,memory:4,touch:false,auto:true},
+ {name:'phone',width:390,height:844,memory:8,touch:true,auto:false},
+ {name:'phone-landscape',width:844,height:390,memory:8,touch:true,auto:false},
+]){
+ const isolated=await browser.newContext({viewport:{width:testCase.width,height:testCase.height},hasTouch:testCase.touch,isMobile:testCase.touch,reducedMotion:'reduce'})
+ await isolated.addInitScript(memory=>Object.defineProperty(navigator,'deviceMemory',{configurable:true,value:memory}),testCase.memory)
+ const checkPage=await isolated.newPage();await routeReaderDevelopmentApi(checkPage,readerOrigin)
+ const modelRequests=[];checkPage.on('request',r=>{if(r.url().includes('synthetic-cube.glb'))modelRequests.push(r.url())})
+ await checkPage.goto(url);await checkPage.locator('.reader-inline-passage strong').waitFor()
+ if(testCase.auto){await checkPage.locator('canvas').waitFor();await checkPage.waitForFunction(()=>!document.querySelector('.model-canvas-loading-overlay.active'));assert.ok(modelRequests.length>0,testCase.name+' automatically requests 3D');assert.equal(await checkPage.getByRole('button',{name:'Load 3D model',exact:true}).count(),0)}
+ else {const load=checkPage.getByRole('button',{name:'Load 3D model',exact:true});await load.waitFor();await checkPage.waitForTimeout(300);assert.equal(modelRequests.length,0,testCase.name+' avoids initial model transfer');const colors=await load.evaluate(n=>({background:getComputedStyle(n).backgroundColor,ink:getComputedStyle(n).color}));assert.equal(colors.background,'rgb(31, 91, 255)');assert.equal(colors.ink,'rgb(255, 255, 255)');await load.click();await checkPage.locator('canvas').waitFor();await checkPage.waitForFunction(()=>!document.querySelector('.model-canvas-loading-overlay.active'));assert.ok(modelRequests.length>0)}
+ await isolated.close()
+}
 await page.goto(`${readerOrigin}/evidence/objects/synthetic-object?studio=1`);await page.locator('.reader-inline-passage').getByText('No passage selected',{exact:true}).waitFor();
 assert.equal(await page.locator('.reader-reminder').count(),0,'empty selection has no reminder')
 await page.waitForFunction(()=>document.querySelector('video track'))
@@ -37,7 +53,7 @@ for(const [width,height] of [[1280,800],[390,844],[844,390],[667,375]]){
  assert.ok(boxes['.reader-inline-passage'].y>=Math.max(boxes['.studio-object-surface'].bottom,boxes['.reader-playback'].bottom),'passage below both media')
  for(const button of await page.locator('.reader-playback>button').all()){const r=await button.boundingBox();assert.ok(r.width>=44 && r.height>=44);assert.equal(await button.locator('svg').count(),1);assert.ok(await button.getAttribute('aria-label'))}
  const seek=page.getByRole('slider',{name:'Seek recording',exact:true});const before=Number(await seek.inputValue());await seek.focus();await seek.press('ArrowRight');assert.equal(Number(await seek.inputValue()),before+1000,'one second arrow seek');assert.ok(await seek.getAttribute('aria-valuetext'));assert.equal(await seek.getAttribute('step'),'1000');const mute=page.getByRole('button',{name:'Mute',exact:true});await mute.click();assert.equal(await page.getByRole('button',{name:'Unmute',exact:true}).getAttribute('aria-pressed'),'true');await page.getByRole('button',{name:'Unmute',exact:true}).click()
- if(width===390){await page.getByRole('button',{name:'Load 3D model',exact:true}).click();await page.locator('canvas').waitFor();await page.waitForFunction(()=>!document.querySelector('.model-canvas-loading-overlay.active'));await page.screenshot({path:resolve(artifactRoot,'expanded-390x844.png')})}
+ if(width===390){if(await page.getByRole('button',{name:'Load 3D model',exact:true}).count())await page.getByRole('button',{name:'Load 3D model',exact:true}).click();await page.locator('canvas').waitFor();await page.waitForFunction(()=>!document.querySelector('.model-canvas-loading-overlay.active'));await page.screenshot({path:resolve(artifactRoot,'expanded-390x844.png')})}
  await page.evaluate(()=>scrollTo(0,document.querySelector('.reader-inline-passage').getBoundingClientRect().bottom+scrollY+20));await page.locator('.reader-reminder').waitFor();await page.screenshot({path:resolve(artifactRoot,`reminder-${width}x${height}.png`)})
  await page.locator('.reader-reminder button').click();await page.waitForFunction(()=>!document.querySelector('.reader-reminder'));await page.keyboard.press('Escape');await page.evaluate(()=>scrollTo(0,0));await page.waitForFunction(()=>!document.querySelector('.reader-reminder'))
 

@@ -21,3 +21,5 @@ npm run test:browser
 ```
 
 The reader and Search-return browser suites use generated fixtures. Their controlled API routing supports both the default development API address and same-origin builds. `READER_TEST_DIST` can select another build directory. Physical Safari, touch, assistive-technology and enlarged-text validation remain useful release checks alongside the automated Chromium coverage.
+
+Desktop model loading starts automatically, including lower-memory and narrow fine-pointer desktop windows. Phone/tablet detection retains deliberate loading. Memory, Data Saver and available network estimates choose the constrained or standard server-advertised representation independently of that admission decision. The chosen URL stays stable for the mounted viewer, preserving the Canvas and camera during resizing and connection changes. Existing API capability validation, required-tier failure behavior and default-off hosting switch remain authoritative.

@@ -93,6 +93,7 @@ export function selectMobileVariant({ gated = false, highRisk = false } = {}) {
  */
 export function selectModelVariant({
   gated = false,
+  constrained = gated,
   highRisk = false,
   optimizedDeliveryEnabled = OPTIMIZED_MODEL_DELIVERY_ENABLED,
   deliveryCapabilities = null,
@@ -100,7 +101,7 @@ export function selectModelVariant({
   const tiers = optimizedDeliveryEnabled
     ? normalizeModelDeliveryCapabilities(deliveryCapabilities)
     : null
-  const candidate = gated ? tiers?.constrained : tiers?.standard
+  const candidate = constrained ? tiers?.constrained : tiers?.standard
   if (ALLOWED_MODEL_VARIANTS.includes(candidate)) {
     return candidate
   }
@@ -114,6 +115,7 @@ export function selectModelVariant({
  */
 export function isRequiredModelVariant({
   gated = false,
+  constrained = gated,
   optimizedDeliveryEnabled = OPTIMIZED_MODEL_DELIVERY_ENABLED,
   deliveryCapabilities = null,
 } = {}, variant = '') {
@@ -121,7 +123,7 @@ export function isRequiredModelVariant({
     return false
   }
   const tiers = normalizeModelDeliveryCapabilities(deliveryCapabilities)
-  const requiredVariant = gated ? tiers?.constrained : tiers?.standard
+  const requiredVariant = constrained ? tiers?.constrained : tiers?.standard
   return Boolean(requiredVariant && variant === requiredVariant && ALLOWED_MODEL_VARIANTS.includes(variant))
 }
 
