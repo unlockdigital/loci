@@ -11,6 +11,8 @@ import { PUBLIC_BROWSE_PATH, currentLocationKey, ensureLocationChangeEvents, nav
 import { buildPublicBrowsePageUrl, getPublicObjectPageButtons, normalizePublicObjectPageResponse, PUBLIC_OBJECT_PAGE_SIZE, readPublicObjectPage } from '../lib/publicObjectPager'
 import { setPageMeta } from '../lib/seo'
 import './publicObjectPager.css'
+import '../reader/reader.css'
+import '../reader/search.css'
 import { StudioSurfaceChrome, isStudioSurfaceEnabled, useStudioSurfaceTheme } from './studioSurface'
 
 const PUBLIC_MAIN_CONTENT_ID = 'public-main-content'
@@ -81,7 +83,7 @@ function navigateToEvidenceUrl(value) {
     return false
   }
 
-  window.location.assign(`${target.pathname}${target.search}${target.hash}`)
+  navigateToUrl(`${target.pathname}${target.search}${target.hash}`, { state: { readerOrigin: { url: `${window.location.pathname}${window.location.search}`, scrollY: window.scrollY } } })
   return true
 }
 
@@ -149,6 +151,7 @@ function searchResultContextDetails(result) {
   return [
     { label: 'Object', value: normalizeOptionalText(result?.object_name) },
     { label: 'Collection', value: normalizeOptionalText(result?.project_name) },
+    { label: 'Source recording', value: normalizeOptionalText(result?.video_title) },
   ].filter((detail) => detail.value)
 }
 
@@ -192,15 +195,17 @@ function readInitialSearchFormFromLocation() {
   return {
     query,
     project_id: projectId,
+    searchPage: Math.max(1, Math.floor(Number(params.get('search_page')) || 1)),
   }
 }
 
-function buildPublicSearchUrl(query, projectId, requestedObjectPage) {
+function buildPublicSearchUrl(query, projectId, requestedObjectPage, searchPage = 1) {
   const normalizedQuery = normalizeOptionalText(query)
   const normalizedProjectId = normalizeOptionalText(projectId)
   const params = new URLSearchParams()
   if (normalizedQuery) {
     params.set('q', normalizedQuery)
+    if (searchPage > 1) params.set('search_page', String(searchPage))
   }
   if (normalizedProjectId) {
     params.set('project_id', normalizedProjectId)
@@ -212,12 +217,12 @@ function buildPublicSearchUrl(query, projectId, requestedObjectPage) {
   return `${PUBLIC_BROWSE_PATH}${serializedParams ? `?${serializedParams}` : ''}`
 }
 
-function syncPublicSearchUrl(query, projectId, { replace = true, objectPage } = {}) {
+function syncPublicSearchUrl(query, projectId, { replace = true, objectPage, searchPage = 1 } = {}) {
   if (typeof window === 'undefined') {
     return
   }
 
-  const targetUrl = buildPublicSearchUrl(query, projectId, objectPage)
+  const targetUrl = buildPublicSearchUrl(query, projectId, objectPage, searchPage)
 
   if (targetUrl === PUBLIC_BROWSE_PATH) {
     navigateToPublicBrowse({ replace })
@@ -533,6 +538,7 @@ export default function PublicBrowseApp() {
       : `Showing ${searchResultsStart}-${searchResultsEnd} of ${searchMeta.totalResults} matching moments.`
     : ''
   const activeSearchQuery = normalizeOptionalText(searchForm.query)
+  const searchView = Boolean(activeSearchQuery)
   const hasActiveSearchState = Boolean(
     hasSearched
     || searchResults.length
@@ -540,6 +546,15 @@ export default function PublicBrowseApp() {
     || searchLoading
   )
   const hasActiveQuery = Boolean(activeSearchQuery) && hasActiveSearchState
+  const returnScrollRestoredRef = useRef(false)
+  useEffect(() => {
+    if (returnScrollRestoredRef.current || loading || objectsLoading || searchLoading || (activeSearchQuery && !hasSearched)) return
+    const scrollY = Number(window.history.state?.readerScrollY)
+    if (!Number.isFinite(scrollY)) return
+    returnScrollRestoredRef.current = true
+    window.requestAnimationFrame(() => window.scrollTo({ top: Math.max(0, scrollY), behavior: 'auto' }))
+  }, [loading, objectsLoading, searchLoading, activeSearchQuery, hasSearched])
+
 
   useEffect(() => {
     const projectName = normalizeOptionalText(activeProject?.name)
@@ -605,9 +620,9 @@ export default function PublicBrowseApp() {
       return
     }
 
-    const targetUrl = buildPublicSearchUrl(query, projectId, objectPageOverride)
+    const targetUrl = buildPublicSearchUrl(query, projectId, objectPageOverride, page)
     if (targetUrl !== currentLocationKey()) {
-      syncPublicSearchUrl(query, projectId, { replace: replaceUrl })
+      syncPublicSearchUrl(query, projectId, { replace: replaceUrl, searchPage: page })
       return
     }
 
@@ -669,7 +684,7 @@ export default function PublicBrowseApp() {
       return
     }
 
-    void executeSearch(1, {
+    void executeSearch(initialSearch.searchPage || 1, {
       query,
       projectId: initialSearch.project_id || undefined,
       replaceUrl: true,
@@ -799,19 +814,19 @@ export default function PublicBrowseApp() {
       <main
         id={PUBLIC_MAIN_CONTENT_ID}
         tabIndex={-1}
-        className={`public-library-screen skip-link-target ${searchResults.length ? 'search-active' : ''} ${studioEnabled ? 'studio-surface' : ''}`.trim()}
+        className={`public-library-screen skip-link-target ${searchResults.length ? 'search-active' : ''} ${searchView ? 'reader-search-page' : ''} ${studioEnabled ? 'studio-surface' : ''}`.trim()}
         data-studio-theme={studioEnabled ? palette : undefined}
       >
         {studioEnabled ? (
           <StudioSurfaceChrome
             palette={palette}
             onToggle={toggle}
-            eyebrow="Loci · Public studio"
-            title="Explore published objects"
+            eyebrow={searchView ? '' : 'Loci · Public studio'}
+            title={searchView ? '' : 'Explore published objects'}
           />
         ) : null}
         <div className="public-library-shell">
-        <header className="public-library-hero">
+        {!searchView ? <header className="public-library-hero">
           <div className="public-library-hero-copy">
             <a
               className="surface-branding surface-branding-link public-library-branding"
@@ -849,7 +864,7 @@ export default function PublicBrowseApp() {
           <div className="public-library-metrics" aria-label="Published collection metrics">
             <PublicStatsPanel />
           </div>
-        </header>
+        </header> : null}
 
         {browseError ? (
           <ErrorState
@@ -867,10 +882,12 @@ export default function PublicBrowseApp() {
 
         <section className="public-library-search-panel">
           <div className="public-library-section-copy">
-            <p className="kicker">Search the collection</p>
-            <h2>Find a word, phrase, or recorded moment and open it directly.</h2>
+            {searchView ? <h1>Search recorded moments</h1> : <>
+              <p className="kicker">Search the collection</p>
+              <h2>Find a word, phrase, or recorded moment and open it directly.</h2>
+            </>}
             <p className="muted">
-              Search published transcript moments with scene support and move straight into the matching evidence page.
+              {searchView ? 'Search the recordings. Open a moment to inspect its evidence.' : 'Search published transcript moments with scene support and move straight into the matching evidence page.'}
             </p>
           </div>
 
@@ -950,8 +967,8 @@ export default function PublicBrowseApp() {
                       <div className="list-main video-list-main search-result-body">
                         <div className="search-result-heading">
                           <div className="search-result-heading-copy">
-                            <p className="search-result-kicker">{result.video_title || 'Published evidence moment'}</p>
-                            <strong>Transcript moment {formatClock(contextWindow.momentStart)}-{formatClock(contextWindow.momentEnd)}</strong>
+                            <strong>{result.object_name || result.video_title || 'Published evidence moment'}</strong>
+                            <p className="search-result-kicker">{formatClock(contextWindow.momentStart)}–{formatClock(contextWindow.momentEnd)} · Recorded transcript</p>
                             <span className="search-result-context">
                               Transcript context {formatClock(contextWindow.contextStart)}-{formatClock(contextWindow.contextEnd)}
                             </span>
@@ -962,13 +979,17 @@ export default function PublicBrowseApp() {
                             <span className="search-result-evidence-label">Transcript line</span>
                             <p className="search-result-text">{result.text}</p>
                           </div>
+                        </div>
+                        {result.project_name ? <p className="reader-result-collection">{result.project_name}</p> : null}
+                        <details className="reader-match-details">
+                          <summary>Match details &amp; scene description</summary>
+                          <p>Transcript context {formatClock(contextWindow.contextStart)}–{formatClock(contextWindow.contextEnd)}</p>
                           {sceneSupportText ? (
                             <div className="search-result-evidence-block">
                               <span className="search-result-evidence-label">Scene support</span>
                               <p className="search-result-scene-line">{sceneSupportText}</p>
                             </div>
                           ) : null}
-                        </div>
                         <p className="search-result-match-line">{searchMatchBasisLine(result)}</p>
                         {resultDetails.length ? (
                           <div className="search-result-detail-list" aria-label="Result context">
@@ -980,7 +1001,6 @@ export default function PublicBrowseApp() {
                             ))}
                           </div>
                         ) : null}
-                      </div>
                       <div className="search-result-rail" aria-label="Match support">
                         <div className="search-result-meta">
                           {result.lexical_match ? <span className="search-fit-chip lexical">Keyword match</span> : null}
@@ -991,6 +1011,8 @@ export default function PublicBrowseApp() {
                           ) : null}
                           {hasSceneSupport ? <span className="search-fit-chip visual">Scene support</span> : null}
                         </div>
+                      </div>
+                        </details>
                       </div>
                       <div className="search-result-actions">
                         <button

@@ -344,9 +344,19 @@ try {
     const actualMs = await video.evaluate(node => node.currentTime * 1000)
     assert.ok(actualMs < 5500, `${stage}: playback jumped out of the 2–4 second clip window to ${actualMs}ms`)
   }
+  const chooseStudioView = async (name) => {
+    const menu = page.locator('.reader-menu')
+    if (await menu.count() && !(await menu.evaluate(node => node.open))) await menu.locator(':scope > summary').click()
+    await page.getByRole('radio', { name, exact: true }).click()
+    if (await menu.count() && await menu.evaluate(node => node.open)) await menu.locator(':scope > summary').click()
+  }
+  const openPlaybackCitationContext = async () => {
+    const context = page.locator('.reader-playback-context')
+    if (await context.count() && !(await context.evaluate(node => node.open))) await context.locator(':scope > summary').click()
+  }
   const switchViewWhilePlaying = async (viewName, stage) => {
     const beforeMs = await video.evaluate(node => node.currentTime * 1000)
-    await page.getByRole('radio', { name: viewName }).click()
+    await chooseStudioView(viewName)
     await page.waitForFunction(before => {
       const node = document.querySelector('video.evidence-video-element')
       return node && !node.paused && node.currentTime * 1000 > before + 120 && node.currentTime < 5.5
@@ -358,7 +368,7 @@ try {
   // A long transcript makes each scroll-follow target move through the actual
   // list viewport. Exercise exact line selection in both Studio views, then
   // switch views while the same video moment is playing.
-  await page.getByRole('radio', { name: 'Console' }).click()
+  await chooseStudioView('Console')
   await video.evaluate(node => node.play())
   await page.waitForFunction(() => {
     const node = document.querySelector('video.evidence-video-element')
@@ -380,7 +390,7 @@ try {
 
   await annotationMarker.click()
   await verifySeek(2000, 'reselected spatial annotation linked clip A')
-  await page.getByRole('radio', { name: 'Console' }).click()
+  await chooseStudioView('Console')
 
   // A native media scrub cancels the annotation's guided clip sequence. Scrub
   // inside clip A and make sure playback continues through its old boundary
@@ -420,7 +430,7 @@ try {
     const node = document.querySelector('video.evidence-video-element')
     return node && !node.paused && node.currentTime >= 3.3 && node.currentTime < 4
   }, null, { timeout: 5000 })
-  await page.getByRole('radio', { name: 'Focus' }).click()
+  await chooseStudioView('Focus')
 
   const linkedClipB = page.getByRole('button', { name: /Clip 2.*00:06.*00:09/ })
   await page.waitForFunction(() => {
@@ -433,7 +443,7 @@ try {
   assert.equal(await linkedClipB.getAttribute('aria-pressed'), 'true', 'guided annotation playback must automatically select linked clip B')
   await verifyActiveTranscriptLineVisible('guided playback in Focus view')
 
-  await page.getByRole('radio', { name: 'Console' }).click()
+  await chooseStudioView('Console')
   await page.waitForFunction(() => {
     const node = document.querySelector('video.evidence-video-element')
     return node && !node.paused && node.currentTime >= 6.2 && node.currentTime < 9
@@ -454,7 +464,8 @@ try {
   const activeSource = await page.evaluate(() => document.querySelector('video.evidence-video-element')?.currentSrc)
   assert.ok(activeSource?.endsWith('/fixtures/synthetic-12s.mp4'), `second clip source identity mismatch: ${activeSource}`)
 
-  await page.getByRole('button', { name: 'Copy link' }).click()
+  await openPlaybackCitationContext()
+  await page.locator('.studio-cite-slot').getByRole('button', { name: 'Copy link', exact: true }).click()
   await page.getByText('Link copied.').waitFor({ state: 'visible' })
   const shareUrl = await page.evaluate(() => navigator.clipboard.readText())
   const parsedShare = new URL(shareUrl)
@@ -463,7 +474,7 @@ try {
   assert.equal(parsedShare.searchParams.get('annotation_context'), annotationId, 'share URL must preserve the exact selected annotation among overlapping links')
   assert.equal(parsedShare.searchParams.get('studio'), '1', 'share URL must retain the Studio surface')
   await page.goto(shareUrl, { waitUntil: 'domcontentloaded' })
-  await page.getByText('Vessel rim annotation', { exact: true }).waitFor({ state: 'visible' })
+  await page.locator('.reader-inline-passage strong').filter({ hasText: secondClip.title }).waitFor({ state: 'visible' })
   await page.waitForFunction(() => {
     const node = document.querySelector('video.evidence-video-element')
     return node && node.readyState >= HTMLMediaElement.HAVE_METADATA
@@ -472,7 +483,8 @@ try {
   assert.equal(await page.getByRole('button', { name: /Clip 2.*00:06.*00:09/ }).getAttribute('aria-pressed'), 'true')
   assert.equal(await page.getByRole('button', { name: 'Vessel rim annotation', exact: true }).getAttribute('aria-current'), 'true', 'clip share reload must restore its spatial annotation')
 
-  await page.getByRole('button', { name: 'Copy citation' }).first().click()
+  await openPlaybackCitationContext()
+  await page.locator('.studio-cite-slot').getByRole('button', { name: 'Copy citation', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Copy citation' })
   await dialog.waitFor({ state: 'visible' })
   const citationText = await dialog.locator('textarea').inputValue()

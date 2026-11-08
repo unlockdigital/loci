@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import MomentRail from './MomentRail'
+import PinnedPassage from '../../reader/PinnedPassage'
+import RecordingControls, { Icon as RecordingIcon } from '../../reader/RecordingControls'
+import '../../reader/reader.css'
 import { calculateTranscriptScrollTop } from './transcriptScroll'
 import { PUBLIC_BROWSE_PATH } from '../../lib/navigation'
 import { applyDocumentThemeChrome } from '../../lib/documentTheme'
@@ -52,7 +55,13 @@ function useStudioView() {
 
 function ViewSegmentedControl({ view, onSelect }) {
   return (
-    <div className="studio-view-control" role="radiogroup" aria-label="Studio view">
+    <div className="studio-view-control" role="radiogroup" aria-label="Studio view" onKeyDown={(event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
+      event.preventDefault()
+      const next = event.key === 'Home' ? 'console' : event.key === 'End' ? 'focus' : view === 'console' ? 'focus' : 'console'
+      onSelect(next)
+      event.currentTarget.querySelectorAll('button')[VIEW_MODES.indexOf(next)]?.focus()
+    }}>
       {VIEW_MODES.map((viewMode) => {
         const isActive = viewMode === view
         return (
@@ -468,6 +477,17 @@ function StudioInteractionHint({ activeMoment, formatClock }) {
 
 export default function StudioShell({
   mainContentId,
+  readerSelection = null,
+  readerSelectionRevision,
+  onSelectRelatedPassage,
+  onSelectRelatedChoice,
+  onUnpinPassage,
+  onReplayPassage,
+  relatedChoices,
+  videoRef,
+  modelDeferred = false,
+  playbackAttribution = '',
+  videoError = '',
   autoScrollOnLoad = false,
   objectTitle,
   objectSummary = '',
@@ -498,6 +518,59 @@ export default function StudioShell({
   const { mode, palette, selectMode } = useStudioTheme()
   const { view, selectView } = useStudioView()
   const reducedMotion = usePrefersReducedMotion()
+  const [pinned, setPinned] = useState(readerSelection)
+  const [pinHeight, setPinHeight] = useState(0)
+  const [mediaHeight, setMediaHeight] = useState(0)
+  const videoPanelRef = useRef(null)
+  const enlargeButtonRef = useRef(null)
+  const [modelEnlarged, setModelEnlarged] = useState(false)
+  const modelPanelRef = useRef(null)
+  const transcriptRef = useRef(null)
+  const selectionKey = readerSelection?.key || ''
+  useEffect(() => { setPinned(readerSelection) }, [selectionKey, readerSelectionRevision])
+  useEffect(() => {
+    const panel = videoPanelRef.current
+    if (!panel) return undefined
+    const measure = () => {
+      const heading = panel.querySelector('.reader-panel-heading')
+      const height = panel.getBoundingClientRect().height - (heading?.getBoundingClientRect().height || 0)
+      setMediaHeight(height > 0 ? height : 0)
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(panel)
+    for (const child of panel.children) observer.observe(child)
+    measure()
+    return () => observer.disconnect()
+  }, [videoRef])
+  // An always-mounted nonmodal dialog enters the top layer without reparenting Canvas.
+  function enlargeModel() {
+    const panel = modelPanelRef.current
+    panel.close()
+    panel.showModal()
+    setModelEnlarged(true)
+  }
+  function reduceModel(restoreFocus = true) {
+    const panel = modelPanelRef.current
+    if (panel.matches(':modal')) panel.close()
+    panel.show()
+    setModelEnlarged(false)
+    if (restoreFocus) enlargeButtonRef.current?.focus()
+  }
+  function navigateTranscript() {
+    if (modelPanelRef.current?.matches(':modal')) reduceModel(false)
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const rows = transcriptRef.current?.querySelectorAll('.studio-transcript-line') || []
+      const selected = transcriptSegments.findIndex(segment => Number(segment.start_ms) === pinned?.startMs)
+      const destination = rows[selected] || transcriptRef.current?.querySelector('.studio-transcript-heading')
+      if (destination) { if (destination.tagName !== 'BUTTON') destination.tabIndex = -1; destination.focus({ preventScroll: true }); destination.scrollIntoView({ block: 'center' }) }
+    }))
+  }
+  const passageProps = {
+    selection: pinned ? { ...pinned, relatedChoices: pinned.relatedChoices || relatedChoices } : null, currentMs, formatClock,
+    onReplay: () => onReplayPassage ? onReplayPassage() : handleSeek({ seekMs: pinned.startMs, source: 'transport' }),
+    onTranscript: navigateTranscript,
+    onUnpin: () => { setPinned(null); onUnpinPassage?.() }, onSelectRelated: onSelectRelatedPassage || onSelectRelatedChoice,
+  }
   const handleSeek = useCallback(
     (target) => {
       if (typeof onSeek === 'function') {
@@ -511,7 +584,8 @@ export default function StudioShell({
     <main
       id={mainContentId}
       tabIndex={-1}
-      className="studio-shell skip-link-target"
+      style={{ '--reader-pin-height': `${pinHeight}px`, '--reader-media-height': mediaHeight ? `${mediaHeight}px` : undefined }}
+      className="studio-shell reader-surface skip-link-target"
       data-studio-theme={palette}
       data-studio-theme-mode={mode}
       data-studio-view={view}
@@ -534,7 +608,7 @@ export default function StudioShell({
           {objectTitle ? (
             <div className="studio-chrome-title">
               <span className="public-experience-eyebrow">{projectName || 'Studio'}</span>
-              <strong>{objectTitle}</strong>
+              <strong title={objectTitle}>{objectTitle}</strong>
             </div>
           ) : null}
           <div className="studio-chrome-controls">
@@ -548,28 +622,29 @@ export default function StudioShell({
                 }
               }}
             >
-              Return to homepage
+              ← Collection
             </a>
-            <ViewSegmentedControl view={view} onSelect={selectView} />
+            <details className="reader-menu"><summary>More</summary><div className="reader-menu-body">
+              <ViewSegmentedControl view={view} onSelect={selectView} />
+              <ObjectDescriptionDisclosure summary={objectSummary} externalUrl={objectExternalUrl} />
+              {searchSlot ? <details><summary>Search recorded moments</summary>{searchSlot}</details> : null}
+            </div></details>
             <ThemeToggleButton palette={palette} onSelect={selectMode} />
           </div>
         </div>
-        {objectTitle ? (
-          <ObjectDescriptionDisclosure summary={objectSummary} externalUrl={objectExternalUrl} />
-        ) : null}
       </header>
 
-      {searchSlot ? (
-        <div className="studio-search-region">{searchSlot}</div>
-      ) : null}
-
       <section className="studio-stage" aria-label="Object and session stage">
-        <div className="studio-object-panel" aria-label="3D object view">
-          <div className="studio-panel-surface studio-object-surface">
+        <dialog open className={`studio-object-panel reader-model-dialog${modelEnlarged ? ' reader-model-enlarged' : ''}`} aria-label="3D object view" ref={modelPanelRef} onCancel={(event) => { if (event.target === event.currentTarget) { event.preventDefault(); reduceModel() } }}>
+          <div className="reader-panel-heading"><span>3D object</span></div>
+          <div className="reader-model-wrapper"><button ref={enlargeButtonRef} type="button" disabled={modelDeferred} className="reader-enlarge-model" aria-label={modelEnlarged ? 'Close enlarged 3D' : 'Enlarge 3D'} title={modelEnlarged ? 'Exit fullscreen 3D' : 'Fullscreen 3D'} onPointerDown={event => event.stopPropagation()} onClick={() => modelEnlarged ? reduceModel() : enlargeModel()}><RecordingIcon name="fullscreen" /></button>
+          <div className="studio-panel-surface studio-object-surface" data-deferred={modelDeferred}>
             {modelSlot}
-          </div>
-        </div>
-        <div className="studio-video-panel" aria-label={objectTitle ? `Session video for ${objectTitle}` : 'Session video'}>
+          </div></div>
+          <div className="reader-model-passage"><PinnedPassage {...passageProps} /></div>
+        </dialog>
+        <div ref={videoPanelRef} className="studio-video-panel" aria-label={objectTitle ? `Session video for ${objectTitle}` : 'Session video'}>
+          <div className="reader-panel-heading"><span>Session recording</span></div>
           <div className="studio-panel-surface studio-video-surface">
             {videoSlot || (
               <div className="studio-video-empty">
@@ -578,13 +653,16 @@ export default function StudioShell({
               </div>
             )}
           </div>
+          {videoSlot && videoRef ? <RecordingControls videoRef={videoRef} currentMs={currentMs} durationMs={durationMs} onSeek={handleSeek} formatClock={formatClock} onTranscript={transcriptSegments.length ? navigateTranscript : undefined} /> : null}
+          {videoError ? <div role="alert"><p>{videoError}</p><button type="button" onClick={() => videoRef.current?.load()}>Retry recording</button></div> : null}
         </div>
+        <PinnedPassage {...passageProps} floating onHeight={setPinHeight} />
       </section>
 
-      <div className="studio-moment-bar">
+      <details className="reader-playback-context"><summary>Playback citation &amp; context</summary><div className="studio-moment-bar">
         <StudioInteractionHint activeMoment={activeMoment} formatClock={formatClock} />
         {citeSlot ? <div className="studio-cite-slot">{citeSlot}</div> : null}
-      </div>
+      </div></details>
 
       {videoSlot ? (
         <StudioTransport
@@ -613,6 +691,7 @@ export default function StudioShell({
         formatClock={formatClock}
       />
 
+      <div ref={transcriptRef}>
       <StudioTranscript
         segments={transcriptSegments}
         activeSegmentIndex={activeSegmentIndex}
@@ -623,6 +702,7 @@ export default function StudioShell({
         autoScrollOnLoad={autoScrollOnLoad}
       />
 
+      </div>
       {/* Overlays (citation dialog + copy feedback) render INSIDE the shell so the
           studio palette (data-studio-theme) cascades to them (review #9). Their
           own position:fixed still floats them above the page. */}

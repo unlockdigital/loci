@@ -140,11 +140,12 @@ async function openConsole(fixture) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce', serviceWorkers: 'block' })
   await context.route('**/*', async (route) => {
     const url = new URL(route.request().url())
-    if (url.origin === origin) { await route.continue(); return }
-    // The source build defaults to hostname:8000. Keep those requests on the
-    // controlled fixture instead of contacting an ambient development service.
-    if (url.origin === 'http://127.0.0.1:8000' && url.pathname.startsWith('/api/')) {
-      report.redirectedDevelopmentApi.push({ method: route.request().method(), path: url.pathname })
+    if (url.origin === origin && !url.pathname.startsWith('/api/')) { await route.continue(); return }
+    // Both same-origin builds and the default hostname:8000 API must use the
+    // same controlled transport. Deliver lost acknowledgements explicitly to
+    // the browser, independently of its native socket-recovery behavior.
+    if ([origin, 'http://127.0.0.1:8000'].includes(url.origin) && url.pathname.startsWith('/api/')) {
+      if (url.origin !== origin) report.redirectedDevelopmentApi.push({ method: route.request().method(), path: url.pathname })
       let response
       try {
         response = await route.fetch({ url: `${origin}${url.pathname}${url.search}`, maxRetries: 0, maxRedirects: 0 })
@@ -440,8 +441,7 @@ try {
   } finally { await superseded.context.close() }
 
   assert.deepEqual(report.blockedExternal, [])
-  const usesDevelopmentProxy = report.redirectedDevelopmentApi.some((request) => request.method === 'POST')
-  assert.deepEqual(report.expectedLostAcknowledgementFailures, usesDevelopmentProxy ? Array.from({ length: 2 }, () => ({ method: 'POST', path: '/api/v1/ops/live-database/sync/start' })) : [])
+  assert.deepEqual(report.expectedLostAcknowledgementFailures, Array.from({ length: 2 }, () => ({ method: 'POST', path: '/api/v1/ops/live-database/sync/start' })))
   assert.deepEqual(report.unknownApi, [])
   assert.deepEqual(report.pageErrors, [])
   assert.equal(report.fixtureError, undefined)
